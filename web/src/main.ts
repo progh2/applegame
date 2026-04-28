@@ -2,6 +2,9 @@ import './style.css'
 import appleUrl from './assets/apple.png'
 import { createGame } from './game/createGame'
 
+// UI는 DOM으로, 게임은 Canvas로 렌더링한다.
+// - DOM: 점수/타이머/버튼/게임오버 오버레이
+// - Canvas: 사과 타일 그리드 + 드래그 선택 박스
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="appShell">
     <header class="topBar">
@@ -41,6 +44,8 @@ const timeEl = document.querySelector<HTMLSpanElement>('#time')!
 const gameoverEl = document.querySelector<HTMLDivElement>('#gameover')!
 const finalScoreEl = document.querySelector<HTMLSpanElement>('#finalScore')!
 
+// Vite에서 번들된 asset URL을 실제 이미지로 로드하기 위한 헬퍼.
+// (Canvas에서는 <img> 엘리먼트가 아니라 HTMLImageElement가 필요)
 function loadImage(url: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image()
@@ -51,12 +56,15 @@ function loadImage(url: string) {
 }
 
 async function boot() {
+  // 게임에서 사용할 사과 스프라이트를 먼저 로드한다.
   const appleImg = await loadImage(appleUrl)
 
+  // 게임 로직 생성. HUD(점수/시간/게임오버) 갱신은 콜백으로 받는다.
   const game = createGame({
     canvas,
     appleImg,
     onHud: ({ score, timeLeftSec, isGameOver }) => {
+      // 시간은 소수로 줄어들기 때문에, UI에서는 초 단위로 보기 좋게 올림 처리한다.
       scoreEl.textContent = String(score)
       timeEl.textContent = String(Math.max(0, Math.ceil(timeLeftSec)))
 
@@ -69,11 +77,14 @@ async function boot() {
     },
   })
 
+  // 재시작 버튼은 동일한 restart 로직을 공유한다.
   const restart = () => game.restart()
   document.querySelector<HTMLButtonElement>('#restart')!.addEventListener('click', restart)
   document.querySelector<HTMLButtonElement>('#restart2')!.addEventListener('click', restart)
 
+  // requestAnimationFrame 루프 시작.
   game.start()
 }
 
+// 엔트리 포인트
 boot()

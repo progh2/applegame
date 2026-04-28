@@ -1,19 +1,28 @@
 type HudState = {
+  // 현재 점수(= 제거한 사과 개수 누적)
   score: number
+  // 남은 시간(초). 내부적으로는 dt로 감소하는 float 값.
   timeLeftSec: number
+  // 게임오버 여부(0초 도달)
   isGameOver: boolean
 }
 
 type CreateGameArgs = {
+  // 렌더링 대상 캔버스
   canvas: HTMLCanvasElement
+  // 타일 배경으로 쓰는 사과 스프라이트
   appleImg: HTMLImageElement
+  // Canvas는 DOM을 직접 모르므로, 점수/시간 표시 같은 UI는 콜백으로 외부에 위임
   onHud: (state: HudState) => void
 }
 
 type Tile = {
+  // 선택/삭제 안정성을 위한 고유 id
   id: number
+  // 그리드 좌표
   col: number
   row: number
+  // 사과에 표시될 숫자(1~9)
   value: number
 }
 
@@ -23,6 +32,7 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n))
 }
 
+// (ax, ay) ~ (bx, by) 두 점으로부터 드래그 선택용 사각형을 만든다.
 function rectFromPoints(ax: number, ay: number, bx: number, by: number): Rect {
   const x1 = Math.min(ax, bx)
   const y1 = Math.min(ay, by)
@@ -31,10 +41,13 @@ function rectFromPoints(ax: number, ay: number, bx: number, by: number): Rect {
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }
 }
 
+// AABB 충돌(선택 사각형과 타일 사각형이 겹치면 선택됨)
 function intersects(a: Rect, b: Rect) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 }
 
+// 게임 리플레이성을 위해 "그럴듯한" 의사 난수 생성기(간단/빠름).
+// (Math.random을 써도 되지만, 추후 시드 고정이 필요해질 때 대응이 쉬움)
 function mulberry32(seed: number) {
   let t = seed >>> 0
   return () => {
@@ -52,6 +65,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
   // 20 * 10 fixed grid (as requested)
   const cols = 20
   const rows = 10
+  // 캔버스 안쪽 여백(보드가 화면에 꽉 차 보이지 않게)
   const padding = 14
   const topPad = 14
   // slightly tighter spacing so apples look bigger
@@ -60,12 +74,16 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
   const panel = '#171b2e'
 
   // These are in "game pixels" (will be scaled to DPR).
+  // - gameW/H: 캔버스의 CSS 크기를 기준으로 한 논리 픽셀 크기
+  // - 실제 canvas.width/height는 DPR을 곱해 고해상도로 잡고, ctx.setTransform으로 좌표계를 논리 픽셀로 맞춘다.
   let gameW = 760
   let gameH = 860
   let cellSize = 64
   let boardX = 0
   let boardY = 0
 
+  // 타일은 "존재하는 것만" 배열에 담는다.
+  // - 삭제 후 리필이 없으므로, 시간이 지날수록 tiles 길이가 줄어든다.
   let tiles: Tile[] = []
   let nextId = 1
 
@@ -74,16 +92,22 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
   let timeLeftSec = timeLimitSec
   let isGameOver = false
 
+  // 드래그 상태
   let dragging = false
+  // 드래그 시작점/현재점(게임 좌표계)
   let dragStart: { x: number; y: number } | null = null
   let dragNow: { x: number; y: number } | null = null
 
+  // 현재 선택된 타일과 합
   let selectedIds = new Set<number>()
   let selectedSum = 0
 
+  // requestAnimationFrame 관리
   let raf = 0
   let lastTs = 0
 
+  // 포인터 이벤트는 매우 자주/불규칙하게 들어올 수 있다.
+  // 마지막 입력 좌표만 저장해두고, 실제 드래그 박스 업데이트는 매 프레임(tick)에서 스무딩하며 반영한다.
   let lastPointer: { x: number; y: number } | null = null
 
   const rand = mulberry32(Date.now())
@@ -102,6 +126,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
 
     canvas.width = Math.round(gameW * dpr)
     canvas.height = Math.round(gameH * dpr)
+    // 이후 모든 그리기 코드는 "논리 픽셀(gameW/H)" 기준으로 작성할 수 있다.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
     const usableW = gameW - padding * 2
@@ -112,6 +137,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
 
     const maxCellW = (bw - cellGap * (cols - 1)) / cols
     const maxCellH = (bh - cellGap * (rows - 1)) / rows
+    // 셀 크기는 가로/세로 중 더 빡빡한 쪽에 맞춘다.
     cellSize = Math.floor(Math.min(maxCellW, maxCellH))
 
     const boardW = cellSize * cols + cellGap * (cols - 1)
@@ -121,6 +147,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
   }
 
   function tileRect(t: Tile): Rect {
+    // 그리드 좌표를 실제 픽셀 사각형으로 변환한다.
     return {
       x: boardX + t.col * (cellSize + cellGap),
       y: boardY + t.row * (cellSize + cellGap),
@@ -133,6 +160,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
   // so we don't need a "tile pick" helper here.
 
   function buildInitialBoard() {
+    // 시작 시 전체 그리드를 타일로 채운다.
     tiles = []
     nextId = 1
     for (let r = 0; r < rows; r++) {
@@ -143,6 +171,8 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
   }
 
   function computeSelection() {
+    // 현재 드래그 박스(dragStart~dragNow)와 겹치는 타일을 모두 선택한다.
+    // 인접 조건은 없고, 사각형에 "걸리기만" 하면 포함된다.
     selectedIds = new Set()
     selectedSum = 0
     if (!dragging || !dragStart || !dragNow) return
@@ -156,6 +186,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
   }
 
   function removeSelected() {
+    // 합이 10일 때만 삭제(실패 시 보드 변화 없음)
     if (selectedSum !== 10 || selectedIds.size === 0) return false
     const removedCount = selectedIds.size
     tiles = tiles.filter((t) => !selectedIds.has(t.id))
@@ -170,6 +201,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
   }
 
   function drawRoundedRect(r: Rect, radius: number) {
+    // 라운드 사각형 path 생성(채우기/스트로크는 호출부에서)
     const rr = clamp(radius, 0, Math.min(r.w, r.h) / 2)
     const x = r.x
     const y = r.y
@@ -213,6 +245,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
       ctx.fill()
 
       // tile body: draw apple image "cover" style
+      // - cover: 타일을 꽉 채우되, 비율 유지(일부가 잘릴 수 있음)
       ctx.save()
       drawRoundedRect(r, 18)
       ctx.clip()
@@ -237,6 +270,8 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
       ctx.stroke()
 
       // number text
+      // 숫자는 이미지 위에서 가독성이 중요해서 굵은 글꼴 + 소프트 그림자를 사용한다.
+      // (strokeText는 특정 글리프에서 깨진 선처럼 보이는 아티팩트가 발생할 수 있어 피한다.)
       const tx = r.x + r.w / 2
       const ty = r.y + r.h / 2 + 2
 
@@ -258,7 +293,9 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
 
     // Selection rectangle
     if (dragging && dragStart && dragNow) {
+      // 드래그 중에는 선택 사각형을 항상 미리 보여준다.
       const sel = rectFromPoints(dragStart.x, dragStart.y, dragNow.x, dragNow.y)
+      // 합이 10이면 성공(빨강), 아니면 진행 중(파랑 계열)
       const ok = selectedSum === 10 && selectedIds.size > 0
       ctx.fillStyle = ok ? 'rgba(255,65,65,0.15)' : 'rgba(106,171,255,0.12)'
       ctx.strokeStyle = ok ? 'rgba(255,90,90,0.85)' : 'rgba(106,171,255,0.85)'
@@ -268,6 +305,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
       ctx.stroke()
 
       // sum badge
+      // 선택 박스 안의 합계를 즉시 보여주면 플레이가 편해진다.
       const badge = `${selectedSum}${selectedIds.size ? '' : ''}`
       ctx.font = `700 18px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif`
       ctx.textAlign = 'left'
@@ -310,6 +348,8 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
   }
 
   function toCanvasPoint(e: PointerEvent) {
+    // PointerEvent 좌표(clientX/Y)는 CSS 픽셀 기준.
+    // 캔버스는 layout()에서 논리 픽셀(gameW/H)로 그리므로 비율 변환이 필요하다.
     const rect = canvas.getBoundingClientRect()
     const x = ((e.clientX - rect.left) / rect.width) * gameW
     const y = ((e.clientY - rect.top) / rect.height) * gameH
@@ -318,6 +358,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
 
   function onPointerDown(e: PointerEvent) {
     if (isGameOver) return
+    // setPointerCapture를 해두면 드래그 중 캔버스 밖으로 나가도 pointermove/up을 놓치지 않는다.
     canvas.setPointerCapture(e.pointerId)
     const p = toCanvasPoint(e)
     dragging = true
@@ -328,6 +369,8 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
 
   function onPointerMove(e: PointerEvent) {
     if (!dragging || isGameOver) return
+    // 이벤트 핸들러에서는 "마지막 입력 좌표"만 갱신한다.
+    // 실제 드래그 박스(dragNow) 업데이트는 tick()에서 스무딩하며 처리.
     lastPointer = toCanvasPoint(e)
   }
 
@@ -336,6 +379,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
     lastPointer = toCanvasPoint(e)
     dragNow = lastPointer
     computeSelection()
+    // 드래그 종료 시점에만 삭제 판정(합=10이면 삭제)
     removeSelected()
     dragging = false
     dragStart = null
@@ -352,12 +396,14 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
 
   function tick(ts: number) {
     if (!lastTs) lastTs = ts
+    // 탭 전환/렉 등으로 dt가 커지는 경우 드래그 스무딩/타이머가 급변하지 않도록 상한을 둔다.
     const dt = Math.min(0.05, (ts - lastTs) / 1000)
     lastTs = ts
 
     // Smooth dragging: update drag position once per frame
     if (dragging && dragStart && lastPointer) {
-      // simple smoothing (critically damped-ish) so it feels like a continuous box drag
+      // 이벤트 기반 갱신은 끊겨 보일 수 있어서, 프레임 기반 스무딩으로 "연속적인 드래그" 느낌을 만든다.
+      // alpha는 프레임레이트에 덜 민감하도록 dt 기반으로 계산한다.
       const alpha = 1 - Math.pow(0.001, dt) // frame-rate independent
       const cur = dragNow ?? dragStart
       dragNow = {
@@ -368,6 +414,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
     }
 
     if (!isGameOver) {
+      // 남은 시간 감소 → 0초면 게임오버
       timeLeftSec -= dt
       if (timeLeftSec <= 0) {
         timeLeftSec = 0
@@ -396,6 +443,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
     buildInitialBoard()
     onHud({ score, timeLeftSec, isGameOver })
 
+    // Pointer Events는 마우스/터치/펜을 통합해서 처리할 수 있어 모바일 대응이 쉽다.
     canvas.addEventListener('pointerdown', onPointerDown)
     canvas.addEventListener('pointermove', onPointerMove)
     canvas.addEventListener('pointerup', onPointerUp)
@@ -408,6 +456,7 @@ export function createGame({ canvas, appleImg, onHud }: CreateGameArgs) {
   }
 
   function restart() {
+    // 상태 초기화 후 보드를 다시 만든다.
     score = 0
     timeLeftSec = timeLimitSec
     isGameOver = false
